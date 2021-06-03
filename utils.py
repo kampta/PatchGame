@@ -190,6 +190,25 @@ def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
                 run_variables[var_name] = checkpoint[var_name]
 
 
+def load_listener_weights(model, pretrained_weights):
+    if os.path.isfile(pretrained_weights):
+        print("=> loading checkpoint '{}'".format(pretrained_weights))
+        checkpoint = torch.load(pretrained_weights, map_location="cpu")
+        # rename moco pre-trained keys
+        state_dict = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint['model']
+        for k in list(state_dict.keys()):
+            # retain only encoder_q up to before the embedding layer
+            if 'vision' in k and 'vision.fc' not in k:
+                state_dict[k.split('vision.')[-1]] = state_dict[k]
+            # delete renamed or unused k
+            del state_dict[k]
+        msg = model.load_state_dict(state_dict, strict=False)
+        print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
+    else:
+        print("There is no reference weights available for this model. Exiting...")
+        sys.exit(0)
+
+
 def cancel_gradients_last_layer(epoch, model, freeze_last_layer):
     if epoch >= freeze_last_layer:
         return

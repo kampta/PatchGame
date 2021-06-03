@@ -52,30 +52,40 @@ python -m torch.distributed.launch --nproc_per_node=1 train.py \
     --patch_size 32 --epochs 100
 ```
 
+## Pre-trained Models
+
+You can download pretrained models [here](https://drive.google.com/file/d/1FUan-7lEE6aoMPVPrVpFuxZZEZ7daLRO/view?usp=sharing) trained on ImageNet using parameters using above command (and default hyperparameters). 
+
 ## Evaluation
 
-To evaluate my model on ImageNet, run:
+### PatchRank with ViT
 
 ```eval
 python eval.py --model-file mymodel.pth --benchmark imagenet
 ```
 
-## Pre-trained Models
-
-You can download pretrained models here:
-
-- [My awesome model](https://drive.google.com/mymodel.pth) trained on ImageNet using parameters x,y,z. 
-
-
-## Results
-
-Our model achieves the following performance on :
-
-### [Image Classification on ImageNet](https://paperswithcode.com/sota/image-classification-on-imagenet)
+This achieves the following accuracy on ImageNet
 
 | Model name         | Top 1 Accuracy  | Top 5 Accuracy |
 | ------------------ |---------------- | -------------- |
-| My awesome model   |     85%         |      95%       |
+| PatchGame(S=32)    |     -         |      -       |
+
+
+### k-NN classification ImageNet with listener's vision module
+
+```eval
+python -m torch.distributed.launch --nproc_per_node=1 eval_knn.py \
+    --pretrained_weights /path/to/checkpoint/dir/checkpoint.pth \
+    --arch resnet18 --nb_knn 20 \
+    --batch_size_per_gpu 1024 --use_cuda 0 \
+    --data_path /patch/to/imagenet/dir
+```
+
+This achieves the following accuracy on ImageNet
+
+| Model name         | Top 1 Accuracy  | Top 5 Accuracy |
+| ------------------ |---------------- | -------------- |
+| PatchGame(S=32)    |     30.3%       |      49.9%     |
 
 
 ## Acknowledgements
