@@ -1,4 +1,4 @@
-# PatchGame: Learning to SignalMid-level Patches in Referential Games
+# PatchGame: Learning to Signal Mid-level Patches in Referential Games
 
 This repository is the official implementation of the paper - "PatchGame: Learning to SignalMid-level Patches in Referential Games" 
 
