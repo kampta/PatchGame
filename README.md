@@ -54,7 +54,7 @@ python -m torch.distributed.launch --nproc_per_node=1 train.py \
 
 ## Pre-trained Models
 
-You can download pretrained models [here](https://drive.google.com/file/d/1FUan-7lEE6aoMPVPrVpFuxZZEZ7daLRO/view?usp=sharing) trained on ImageNet using parameters using above command (and default hyperparameters). 
+You can download pretrained models [here](https://drive.google.com/drive/folders/18wRWHzphtX7um0GB15NMSqIkHyHZrjtc?usp=sharing) trained on ImageNet using parameters using above command (and default hyperparameters). 
 
 ## Evaluation
 
