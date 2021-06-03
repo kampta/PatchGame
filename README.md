@@ -6,7 +6,7 @@ This repository is the official implementation of the paper - "PatchGame: Learni
 
 ## Requirements
 
-We recommend using `anaconda` or `miniconda` for python. Our code has been tested with `python=3.6` on linux.
+We recommend using `anaconda` or `miniconda` for python. Our code has been tested with `python=3.8` on linux.
 
 To create a new environment with conda
 
