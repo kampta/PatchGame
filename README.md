@@ -61,14 +61,14 @@ You can download pretrained models [here](https://drive.google.com/drive/folders
 ### PatchRank with ViT
 
 ```eval
-python eval.py --model-file mymodel.pth --benchmark imagenet
+python eval_patchrank.py --patch-model mymodel.pth --data-path <path to dataset> --topk <no. of patches to use>
 ```
 
-This achieves the following accuracy on ImageNet
+This achieves the following accuracy on ImageNet.
 
 | Model name         | Top 1 Accuracy  | Top 5 Accuracy |
 | ------------------ |---------------- | -------------- |
-| PatchGame(S=32)    |     -         |      -       |
+| PatchGame(S=32, topk=75, size=384x384)    |     58.4%         |      80.9%       |
 
 
 ### k-NN classification ImageNet with listener's vision module
