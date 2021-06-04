@@ -1,15 +1,15 @@
 import os
 import argparse
+import random
 import timm
 from timm.models.vision_transformer import VisionTransformer
 from timm.models.vision_transformer import default_cfgs as timm_vit_cfgs
 import torch
 from torch import nn
-import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 from torchvision import datasets
 from torchvision import transforms
-from patch_game.builder import Speaker
+from patch_game.builder import PatchGame
 
 import utils
 
@@ -70,8 +70,8 @@ def eval(args):
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
-    dataset_train = ReturnIndexDataset(os.path.join(args.data_path, "train"), transform=transform)
-    dataset_val = ReturnIndexDataset(os.path.join(args.data_path, "val"), transform=transform)
+    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, "train"), transform=transform)
+    dataset_val = datasets.ImageFolder(os.path.join(args.data_path, "val"), transform=transform)
     sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train,
@@ -95,38 +95,48 @@ def eval(args):
     vit_model.forward_features = forward_features.__get__(vit_model, VisionTransformer)
     vit_model.forward = forward.__get__(vit_model, VisionTransformer)
     vit_model.cuda()
-    vit_model.eval()
+    vit_model = nn.SyncBatchNorm.convert_sync_batchnorm(vit_model)
+    vit_model = nn.parallel.DistributedDataParallel(vit_model, device_ids=[args.gpu])
+    vit_model = vit_model.eval()
+    patch_model = PatchGame(patch_size=args.patch_size, sender_arch=args.sender_arch,
+            sender_hidden_size=args.patch_hidden_size, sender_dropout=args.sender_dropout,
+            use_context=args.use_context, sender_norm=args.sender_norm,
+            vocab_size=args.vocab_size, max_len=args.max_len, temperature=args.temperature,
+            trainable_temperature=args.trainable_temperature, hard=args.hard,
+            receiver_arch=args.receiver_arch, receiver_dim=args.receiver_dim,
+            receiver_hidden_size=args.receiver_hidden_size,
+            num_heads=args.receiver_num_heads, num_layers=args.receiver_num_layers,
+            topk=args.topk
+        )
+    patch_model = patch_model.cuda()
+    patch_model = nn.parallel.DistributedDataParallel(patch_model, device_ids=[args.gpu])
+    to_restore = {"epoch": 0}
+    utils.restart_from_checkpoint(
+        args.speaker_model,
+        run_variables=to_restore,
+        model=patch_model,
+    )
+    patch_model = patch_model.eval()
 
-    speaker_model = Speaker(arch=args.speaker_arch,
-                            use_context=True,
-                            patch_size=args.patch_size,
-                            topk=args.patch_count if args.patch_count != -1 else None)
-    print("=> loading checkpoint '{}'".format(args.speaker_model))
-    checkpoint = torch.load(args.speaker_model, map_location="cpu")
-    state_dict = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint['model']
-    msg = speaker_model.patch_symbol.load_state_dict(state_dict, strict=False)
-    print(f"=> loaded model_patch '{args.speaker_model}' with msg: {msg}")
-    msg = speaker_model.patch_rank.load_state_dict(state_dict, strict=False)
-    print(f"=> loaded model_rank '{args.speaker_model}' with msg: {msg}")
     print('Computing Train Accuracy')
-    train_accuracy = eval_patches(data_loader_train, vit_model, speaker_model)
+    train_accuracy = eval_patches(data_loader_train, vit_model, patch_model)
     print('Computing Val Accuracy')
-    val_accuracy = eval_patches(data_loader_val, vit_model, speaker_model)
+    val_accuracy = eval_patches(data_loader_val, vit_model, patch_model, args)
 
 
 @torch.no_grad()
-def eval_patches(loader, vit_model, speaker_model):
+def eval_patches(loader, vit_model, patch_model, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
 
     for inp, target in metric_logger.log_every(loader, 20, header):
         # move to gpu
-        inp = nn.functional.interpolate(inp, (224, 224))
+        inp = nn.functional.interpolate(inp, (args.im_size, args.im_size))
         inp = inp.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
 
         with torch.no_grad():
-            _, patches = speaker_model(inp)
+            _, patches = patch_model.module.sender(inp)
             output = vit_model(inp, patches)
         loss = nn.CrossEntropyLoss()(output, target)
         acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
@@ -144,32 +154,57 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size_per_gpu', default=128, type=int, help='Per-GPU batch-size')
     parser.add_argument('--use_cuda', default=True, type=utils.bool_flag,
         help="Should we store the features on GPU? We recommend setting this to False if you encounter OOM")
-    parser.add_argument('--vit_model', default='vit_base_patch16_224', type=str,
+    parser.add_argument('--vit_model', default='vit_base_patch32_384', type=str,
                         help='Pretrained ViT from timm.')
     parser.add_argument('--speaker_arch', default='resnet', type=str,
         help='Architecture of speaker')
     parser.add_argument('--speaker_model', default='', type=str, help="Path to pretrained weights for speaker")
-    parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
-    parser.add_argument('--patch_count', default=-1, type=int, help="# of top-k patches to be used.")
+    parser.add_argument('--im_size', default=384, type=int, help='Image size to be used')
+    parser.add_argument('--patch_size', default=32, type=int, help='Patch resolution of the model.')
     parser.add_argument('--num_workers', default=4, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--world_size", default=1, type=int, help="Please ignore and do not set this argument.")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    parser.add_argument('--gpu', default=None, type=int,
+                        help='GPU id to use.')
+
+    # Game play
+    # Sender
+    parser.add_argument('--patch_hidden_size', default=768, type=int)
+    parser.add_argument('--sender_arch', default='resnet', choices=['resnet', 'vit_tiny'])
+    parser.add_argument('--sender_norm', default='sort')
+    parser.add_argument('--use_context', type=utils.bool_flag, default=True)
+    parser.add_argument('--sender_dropout', default=0.1, type=float)
+    parser.add_argument('--vocab_size', default=128, type=int)
+    parser.add_argument('--max_len', default=1, type=int)
+    parser.add_argument('--start_temperature', default=5.0, type=float)
+    parser.add_argument('--warmup_gumbel_epochs', default=None, type=int)
+    parser.add_argument('--temperature', default=1.0, type=float)
+    parser.add_argument('--trainable_temperature', type=utils.bool_flag, default=False)
+    parser.add_argument('--hard', type=utils.bool_flag, default=True)
+    parser.add_argument('--topk', default=None, type=int)
+
+    # Receiver
+    parser.add_argument('--receiver_arch', default='resnet18')
+    parser.add_argument('--receiver_dim', default=65536, type=int)
+    parser.add_argument('--receiver_hidden_size', default=192, type=int)
+    parser.add_argument('--receiver_num_heads', default=3, type=int)
+    parser.add_argument('--receiver_num_layers', default=12, type=int)
+
     parser.add_argument('--data_path', default='/path/to/imagenet/', type=str)
     args = parser.parse_args()
 
-    # args.dist_url = f'tcp://localhost:{random.randrange(49152, 65535)}'
-    # utils.init_distributed_mode(args)
-    # print("git:\n  {}\n".format(utils.get_sha()))
-    # print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
-    # cudnn.benchmark = True
+    args.dist_url = f'tcp://localhost:{random.randrange(49152, 65535)}'
+    utils.init_distributed_mode(args)
+    print("git:\n  {}\n".format(utils.get_sha()))
+    print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
+    cudnn.benchmark = True
 
     # Checking if selected pretrained vit is compatible with other options
     assert args.vit_model in timm_vit_cfgs.keys(), f'vit_model:{args.vit_model} is not available in timm'
     vit_cfg = timm_vit_cfgs[args.vit_model]
-    # The code defaults to 224 at the moment.
-    assert vit_cfg['input_size'] == (3, 224, 224), f'vit_model:{args.vit_model} has a size that is not supported'
+    assert vit_cfg['input_size'] == (3, args.im_size, args.im_size), f'vit_model:{args.vit_model} has a size that is not supported'
     vit_patch_size = int(args.vit_model.split('_')[-2].replace('patch', ''))
     assert vit_patch_size == args.patch_size, f'vit_model={args.vit_model} has a patch_size={vit_patch_size} but ' \
                                               f'given rank model has patch_size={args.patch_size}'
